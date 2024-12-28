@@ -1048,8 +1048,12 @@ gst_mpd_client2_setup_representation (GstMPDClient2 * client,
           duration = gst_util_uint64_scale (S->d, GST_SECOND, timescale);
           if (S->t > 0) {
             start = S->t;
-            start_time = gst_util_uint64_scale (S->t, GST_SECOND, timescale)
-                + PeriodStart - presentationTimeOffset;
+            start_time = gst_util_uint64_scale (S->t, GST_SECOND, timescale);
+            // This is to prevent the start_time from being negative (overflow)
+            if (start_time < presentationTimeOffset)
+              start_time = 0;
+            else
+              start_time += PeriodStart - presentationTimeOffset;
           }
 
           if (!gst_mpd_client2_add_media_segment (stream, NULL, i, S->r, start,
