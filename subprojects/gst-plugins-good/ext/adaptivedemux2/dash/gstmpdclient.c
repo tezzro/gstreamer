@@ -1051,7 +1051,7 @@ gst_mpd_client2_setup_representation (GstMPDClient2 * client,
             start_time = gst_util_uint64_scale (S->t, GST_SECOND, timescale);
             // This is to prevent the start_time from being negative (overflow)
             if (start_time < presentationTimeOffset)
-              start_time = 0;
+              start_time = PeriodStart;
             else
               start_time += PeriodStart - presentationTimeOffset;
           }
