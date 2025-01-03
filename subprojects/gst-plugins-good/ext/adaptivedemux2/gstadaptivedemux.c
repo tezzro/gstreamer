@@ -3710,7 +3710,11 @@ static void
 handle_manifest_download_failure (DownloadRequest * request,
     DownloadRequestState state, GstAdaptiveDemux * demux)
 {
-  GST_FIXME_OBJECT (demux, "Manifest download failed.");
+  GST_FIXME_OBJECT (demux,
+      "Manifest download failed. Request state: %d. Request URI: "
+      "%s. Status: %u. Request Time: %lu, Request End: %lu",
+      state, request->uri, request->status_code,
+      request->download_request_time, request->download_end_time);
   /* Retry or error out here */
 }
 
