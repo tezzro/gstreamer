@@ -2989,13 +2989,24 @@ gst_adaptive_demux_manifest_update_cb (GstAdaptiveDemux * demux)
     }
   }
 
-  if (schedule_again) {
-    GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
+  /* Manifest update might have changed liveness of the stream. */
+  if (!gst_adaptive_demux_is_live (demux)) {
+    schedule_again = FALSE;
+  }
 
-    demux->priv->manifest_updates_cb =
-        gst_adaptive_demux_loop_call_delayed (demux->priv->scheduler_task,
-        klass->get_manifest_update_interval (demux) * GST_USECOND,
-        (GSourceFunc) gst_adaptive_demux_manifest_update_cb, demux, NULL);
+  /* Start/stop state of the update task may already be in the right state after
+   * calling update_manifest. */
+  if (schedule_again) {
+    if (demux->priv->manifest_updates_cb == 0) {
+      GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
+
+      demux->priv->manifest_updates_cb =
+          gst_adaptive_demux_loop_call_delayed (demux->priv->scheduler_task,
+          klass->get_manifest_update_interval (demux) * GST_USECOND,
+          (GSourceFunc) gst_adaptive_demux_manifest_update_cb, demux, NULL);
+    }
+  } else {
+    gst_adaptive_demux_stop_manifest_update_task (demux);
   }
 
   GST_MANIFEST_UNLOCK (demux);
@@ -3648,7 +3659,7 @@ gst_adaptive_demux_get_manifest_ref_uri (GstAdaptiveDemux * d)
 
 static void
 handle_manifest_download_complete (DownloadRequest * request,
-    DownloadRequestState state, GstAdaptiveDemux * demux)
+    GstAdaptiveDemux * demux)
 {
   GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
   GstBuffer *buffer;
@@ -3708,12 +3719,12 @@ handle_manifest_download_complete (DownloadRequest * request,
 
 static void
 handle_manifest_download_failure (DownloadRequest * request,
-    DownloadRequestState state, GstAdaptiveDemux * demux)
+    GstAdaptiveDemux * demux)
 {
   GST_FIXME_OBJECT (demux,
       "Manifest download failed. Request state: %d. Request URI: "
       "%s. Status: %u. Request Time: %lu, Request End: %lu",
-      state, request->uri, request->status_code,
+      request->state, request->uri, request->status_code,
       request->download_request_time, request->download_end_time);
   /* Retry or error out here */
 }
@@ -3727,13 +3738,8 @@ gst_adaptive_demux_update_manifest_default (GstAdaptiveDemux * demux)
 
   request = download_request_new_uri (demux->manifest_uri);
 
-  download_request_set_callbacks (request,
-      (DownloadRequestEventCallback) handle_manifest_download_complete,
-      (DownloadRequestEventCallback) handle_manifest_download_failure,
-      NULL, NULL, demux);
-
   if (!downloadhelper_submit_request (demux->download_helper, NULL,
-          DOWNLOAD_FLAG_COMPRESS | DOWNLOAD_FLAG_FORCE_REFRESH, request,
+          DOWNLOAD_FLAG_COMPRESS | DOWNLOAD_FLAG_FORCE_REFRESH | DOWNLOAD_FLAG_BLOCKING, request,
           &error)) {
     if (error) {
       GST_ELEMENT_WARNING (demux, RESOURCE, FAILED,
@@ -3741,6 +3747,17 @@ gst_adaptive_demux_update_manifest_default (GstAdaptiveDemux * demux)
       g_clear_error (&error);
     }
     ret = GST_FLOW_NOT_LINKED;
+  }
+
+  switch (request->state) {
+    case DOWNLOAD_REQUEST_STATE_COMPLETE:
+      handle_manifest_download_complete (request, demux);
+      break;
+    case DOWNLOAD_REQUEST_STATE_ERROR:
+      handle_manifest_download_failure (request, demux);
+      break;
+    default:
+      break;
   }
 
   return ret;
