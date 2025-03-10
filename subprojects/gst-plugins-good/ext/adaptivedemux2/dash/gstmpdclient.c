@@ -1716,10 +1716,16 @@ gst_mpd_client2_stream_seek (GstMPDClient2 * client, GstActiveStream * stream,
         GstClockTime chunk_time;
 
         selectedChunk = segment;
-        repeat_index =
-            ((ts - segment->start) +
-            ((GstMediaSegment *) stream->segments->pdata[0])->start) /
-            segment->duration;
+        if (ts < segment->start) {
+            /* Seek time lies in a gap between segments. Continue playing from
+             * the first repetition of selectedChunk. */
+            repeat_index = 0;
+        } else {
+            repeat_index =
+                ((ts - segment->start) +
+                ((GstMediaSegment *) stream->segments->pdata[0])->start) /
+                segment->duration;
+        }
 
         chunk_time = segment->start + segment->duration * repeat_index;
 
