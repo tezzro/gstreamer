@@ -1415,10 +1415,8 @@ gst_mpd_client2_setup_media_presentation (GstMPDClient2 * client,
           start;
     } else if (period_node->duration != -1) {
       duration = period_node->duration * GST_MSECOND;
-    } else if (client->mpd_root_node->type == GST_MPD_FILE_TYPE_DYNAMIC &&
-        list->next == NULL) {
+    } else if (client->mpd_root_node->type == GST_MPD_FILE_TYPE_DYNAMIC) {
       /* might be a live file, ignore unspecified duration */
-      duration = GST_CLOCK_TIME_NONE;
     } else {
       /* Invalid MPD file! */
       GST_ERROR
@@ -1718,22 +1716,16 @@ gst_mpd_client2_stream_seek (GstMPDClient2 * client, GstActiveStream * stream,
         GstClockTime chunk_time;
 
         selectedChunk = segment;
-        /* commit:
-           https://gitlab.freedesktop.org/gstreamer/gstreamer/-/commit/8a9821e8050122fb80475d8f1a805e378bc749bd
-         */
-
         if (ts < segment->start) {
-          /* Jump small gaps if the gap is less than 5ms */
-          if (segment->start - ts < 5 * GST_MSECOND) {
-            GST_DEBUG ("Jumping small gap");
-            ts = segment->start;
-          } else {
-            /* I'm not sure what to do */
-            GST_DEBUG ("The gap is too big, can't jump");
-            return FALSE;
-          }
+            /* Seek time lies in a gap between segments. Continue playing from
+             * the first repetition of selectedChunk. */
+            repeat_index = 0;
+        } else {
+            repeat_index =
+                ((ts - segment->start) +
+                ((GstMediaSegment *) stream->segments->pdata[0])->start) /
+                segment->duration;
         }
-        repeat_index = (ts - segment->start) / segment->duration;
 
         chunk_time = segment->start + segment->duration * repeat_index;
 
