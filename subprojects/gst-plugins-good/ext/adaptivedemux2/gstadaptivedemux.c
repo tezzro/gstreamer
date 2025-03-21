@@ -2958,17 +2958,6 @@ gst_adaptive_demux_manifest_update_cb (GstAdaptiveDemux * demux)
   if (ret == GST_FLOW_OK) {
     GST_DEBUG_OBJECT (demux, "Updated playlist successfully");
     demux->priv->update_failed_count = 0;
-
-    /* Wake up download tasks */
-    if (demux->priv->stream_waiting_for_manifest) {
-      GList *iter;
-
-      for (iter = demux->input_period->streams; iter; iter = g_list_next (iter)) {
-        GstAdaptiveDemux2Stream *stream = iter->data;
-        gst_adaptive_demux2_stream_on_manifest_update (stream);
-      }
-      demux->priv->stream_waiting_for_manifest = FALSE;
-    }
   } else if (ret == GST_ADAPTIVE_DEMUX_FLOW_LOST_SYNC) {
     schedule_again = FALSE;
     gst_adaptive_demux_handle_lost_sync (demux);
@@ -2989,24 +2978,13 @@ gst_adaptive_demux_manifest_update_cb (GstAdaptiveDemux * demux)
     }
   }
 
-  /* Manifest update might have changed liveness of the stream. */
-  if (!gst_adaptive_demux_is_live (demux)) {
-    schedule_again = FALSE;
-  }
-
-  /* Start/stop state of the update task may already be in the right state after
-   * calling update_manifest. */
   if (schedule_again) {
-    if (demux->priv->manifest_updates_cb == 0) {
-      GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
+    GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
 
-      demux->priv->manifest_updates_cb =
-          gst_adaptive_demux_loop_call_delayed (demux->priv->scheduler_task,
-          klass->get_manifest_update_interval (demux) * GST_USECOND,
-          (GSourceFunc) gst_adaptive_demux_manifest_update_cb, demux, NULL);
-    }
-  } else {
-    gst_adaptive_demux_stop_manifest_update_task (demux);
+    demux->priv->manifest_updates_cb =
+        gst_adaptive_demux_loop_call_delayed (demux->priv->scheduler_task,
+        klass->get_manifest_update_interval (demux) * GST_USECOND,
+        (GSourceFunc) gst_adaptive_demux_manifest_update_cb, demux, NULL);
   }
 
   GST_MANIFEST_UNLOCK (demux);
@@ -3659,7 +3637,7 @@ gst_adaptive_demux_get_manifest_ref_uri (GstAdaptiveDemux * d)
 
 static void
 handle_manifest_download_complete (DownloadRequest * request,
-    GstAdaptiveDemux * demux)
+    DownloadRequestState state, GstAdaptiveDemux * demux)
 {
   GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
   GstBuffer *buffer;
@@ -3703,6 +3681,17 @@ handle_manifest_download_complete (DownloadRequest * request,
           "Duration unknown, can not send the duration message");
     }
 
+    /* Wake up download tasks */
+    if (demux->priv->stream_waiting_for_manifest) {
+      GList *iter;
+
+      for (iter = demux->input_period->streams; iter; iter = g_list_next (iter)) {
+        GstAdaptiveDemux2Stream *stream = iter->data;
+        gst_adaptive_demux2_stream_on_manifest_update (stream);
+      }
+      demux->priv->stream_waiting_for_manifest = FALSE;
+    }
+
     /* If a manifest changes it's liveness or periodic updateness, we need
      * to start/stop the manifest update task appropriately */
     /* Keep this condition in sync with the one in
@@ -3719,12 +3708,12 @@ handle_manifest_download_complete (DownloadRequest * request,
 
 static void
 handle_manifest_download_failure (DownloadRequest * request,
-    GstAdaptiveDemux * demux)
+    DownloadRequestState state, GstAdaptiveDemux * demux)
 {
   GST_FIXME_OBJECT (demux,
       "Manifest download failed. Request state: %d. Request URI: "
       "%s. Status: %u. Request Time: %lu, Request End: %lu",
-      request->state, request->uri, request->status_code,
+      state, request->uri, request->status_code,
       request->download_request_time, request->download_end_time);
   /* Retry or error out here */
 }
@@ -3738,8 +3727,13 @@ gst_adaptive_demux_update_manifest_default (GstAdaptiveDemux * demux)
 
   request = download_request_new_uri (demux->manifest_uri);
 
+  download_request_set_callbacks (request,
+      (DownloadRequestEventCallback) handle_manifest_download_complete,
+      (DownloadRequestEventCallback) handle_manifest_download_failure,
+      NULL, NULL, demux);
+
   if (!downloadhelper_submit_request (demux->download_helper, NULL,
-          DOWNLOAD_FLAG_COMPRESS | DOWNLOAD_FLAG_FORCE_REFRESH | DOWNLOAD_FLAG_BLOCKING, request,
+          DOWNLOAD_FLAG_COMPRESS | DOWNLOAD_FLAG_FORCE_REFRESH, request,
           &error)) {
     if (error) {
       GST_ELEMENT_WARNING (demux, RESOURCE, FAILED,
@@ -3747,17 +3741,6 @@ gst_adaptive_demux_update_manifest_default (GstAdaptiveDemux * demux)
       g_clear_error (&error);
     }
     ret = GST_FLOW_NOT_LINKED;
-  }
-
-  switch (request->state) {
-    case DOWNLOAD_REQUEST_STATE_COMPLETE:
-      handle_manifest_download_complete (request, demux);
-      break;
-    case DOWNLOAD_REQUEST_STATE_ERROR:
-      handle_manifest_download_failure (request, demux);
-      break;
-    default:
-      break;
   }
 
   return ret;
